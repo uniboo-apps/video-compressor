@@ -237,13 +237,12 @@
 <script src="vendor/util.js"></script>
 <script>
 const CORE_VER = '0.12.6';
-// シングルスレッド版とマルチスレッド版のコア。crossOriginIsolated（COOP/COEP 有効）なら
-// マルチスレッド版を使い CPU 全コアでエンコードする＝大幅に高速。非対応環境は ST にフォールバック。
+// シングルスレッド版コアのみ使用。マルチスレッド版（core-mt）も試したが、x264 エンコードでは
+// pthread の同期オーバーヘッドが wasm では重く、同一マシンで ST 13秒 → MT 2分超と逆に大幅に遅化した
+// （2026-06 実測）。よって MT は採用しない。高速化はプリセット選択＋scale 省略で行う。
 const CORE_ST = `https://unpkg.com/@ffmpeg/core@${CORE_VER}/dist/umd`;
-const CORE_MT = `https://unpkg.com/@ffmpeg/core-mt@${CORE_VER}/dist/umd`;
 const AUDIO_KBPS = 128;          // 音声ビットレート
 const SAFETY = 0.92;             // 目標サイズに対する安全マージン（muxing オーバーヘッド吸収）
-let usingMT = false;             // 実際に MT コアで動いているか（UI 表示用）
 
 const $ = id => document.getElementById(id);
 const dropZone   = $('dropZone');
@@ -306,33 +305,12 @@ function newFFmpeg() {
 async function ensureFFmpeg() {
   if (ffmpegLoaded) return;
   const { toBlobURL } = FFmpegUtil;
-  const canMT = (typeof crossOriginIsolated !== 'undefined') && crossOriginIsolated;
   setStatus('圧縮エンジンを読み込み中…（初回のみ）');
-
-  if (canMT) {
-    try {
-      ffmpeg = newFFmpeg();
-      await ffmpeg.load({
-        coreURL:   await toBlobURL(`${CORE_MT}/ffmpeg-core.js`,     'text/javascript'),
-        wasmURL:   await toBlobURL(`${CORE_MT}/ffmpeg-core.wasm`,   'application/wasm'),
-        workerURL: await toBlobURL(`${CORE_MT}/ffmpeg-core.worker.js`, 'text/javascript'),
-      });
-      usingMT = true;
-      ffmpegLoaded = true;
-      return;
-    } catch (e) {
-      console.log('MT core load failed, falling back to single-thread:', e);
-      try { ffmpeg.terminate(); } catch {}
-    }
-  }
-
-  // シングルスレッド版（フォールバック）
   ffmpeg = newFFmpeg();
   await ffmpeg.load({
     coreURL: await toBlobURL(`${CORE_ST}/ffmpeg-core.js`,   'text/javascript'),
     wasmURL: await toBlobURL(`${CORE_ST}/ffmpeg-core.wasm`, 'application/wasm'),
   });
-  usingMT = false;
   ffmpegLoaded = true;
 }
 let encoding = false;
@@ -505,12 +483,11 @@ async function startCompress() {
 
     let plan = planResolution(targetBytes);
     const preset = pickPreset(targetBytes, currentFile.size);
-    const mode = usingMT ? `マルチスレッド` : `シングルスレッド`;
 
     // 経過時間を表示（長時間でも止まって見えないように）
     const t0 = performance.now();
     const baseMsg = () =>
-      `エンコード中…（${plan.w}×${plan.h} ／ ${plan.videoKbps} kbps ／ ${mode}）` +
+      `エンコード中…（${plan.w}×${plan.h} ／ ${plan.videoKbps} kbps）` +
       (plan.downscaled ? '\n目標が小さいため解像度を下げています' : '');
     elapsedTimer = setInterval(() => {
       if (!encoding) return;
