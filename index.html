@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>動画圧縮ツール</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 20px 16px 40px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+      padding: 32px 28px;
+      width: 100%;
+      max-width: 560px;
+      margin-top: 16px;
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: #aaa;
+      margin-bottom: 24px;
+    }
+
+    .drop-zone {
+      border: 2px dashed #c8d0df;
+      border-radius: 12px;
+      padding: 44px 20px;
+      text-align: center;
+      cursor: pointer;
+      background: #fafbfc;
+      transition: border-color 0.18s, background 0.18s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .drop-zone:hover,
+    .drop-zone.drag-over {
+      border-color: #4f8ef7;
+      background: #f0f5ff;
+    }
+    .drop-zone svg { color: #c0c8d8; margin-bottom: 12px; }
+    .drop-zone p { font-size: 14px; color: #555; line-height: 1.7; }
+    .drop-zone .link { color: #4f8ef7; font-weight: 600; }
+    .drop-hint { font-size: 11px; color: #bbb; margin-top: 8px; }
+
+    #fileInput { display: none; }
+
+    /* Target size selector */
+    .target-section { margin-top: 22px; display: none; }
+    .target-section.visible { display: block; }
+    .field-label {
+      font-size: 11px; color: #999; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px;
+    }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip {
+      flex: 1 1 auto; min-width: 88px;
+      padding: 10px 8px; border: 1px solid #e2e6ee; border-radius: 9px;
+      background: #fafbfc; cursor: pointer; text-align: center;
+      font-size: 13px; color: #555; transition: all 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .chip small { display: block; font-size: 10px; color: #bbb; margin-top: 2px; }
+    .chip.active {
+      border-color: #4f8ef7; background: #f0f5ff; color: #2b6fd6; font-weight: 600;
+    }
+    .chip.active small { color: #6f9ce6; }
+
+    .custom-row { display: none; margin-top: 10px; align-items: center; gap: 10px; }
+    .custom-row.visible { display: flex; }
+    .custom-row input {
+      flex: 1; padding: 11px 12px; border: 1px solid #e2e6ee; border-radius: 9px;
+      font-size: 15px; color: #1a1a2e; outline: none; min-width: 0;
+    }
+    .custom-row input:focus { border-color: #4f8ef7; }
+    .custom-row span { font-size: 14px; color: #888; }
+
+    /* Preview */
+    .preview-section { margin-top: 22px; display: none; }
+    .preview-section.visible { display: block; }
+    .preview-video {
+      width: 100%; max-height: 280px; border-radius: 10px;
+      background: #000; display: block;
+    }
+
+    .info-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px;
+    }
+    .info-box { background: #f8f9fb; border-radius: 8px; padding: 12px 14px; }
+    .info-label {
+      font-size: 10px; color: #bbb; text-transform: uppercase;
+      letter-spacing: 0.4px; margin-bottom: 4px;
+    }
+    .info-value { font-size: 18px; font-weight: 700; color: #1a1a2e; }
+    .info-value.ok   { color: #22c55e; }
+    .info-value.warn { color: #f97316; }
+
+    /* Progress */
+    .progress-wrap { margin-top: 16px; display: none; }
+    .progress-wrap.visible { display: block; }
+    .progress-track {
+      height: 5px; background: #e5e7eb; border-radius: 999px; overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; background: linear-gradient(90deg, #4f8ef7, #a78bfa);
+      border-radius: 999px; width: 0%; transition: width 0.22s ease;
+    }
+    .status {
+      font-size: 13px; color: #777; text-align: center; margin-top: 10px;
+      min-height: 18px; line-height: 1.5;
+    }
+    .status.error   { color: #ef4444; }
+    .status.success { color: #22c55e; }
+
+    /* Buttons */
+    .btn {
+      display: none; width: 100%; padding: 15px; border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 14px;
+      transition: opacity 0.18s; -webkit-tap-highlight-color: transparent;
+    }
+    .btn.visible { display: block; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn-primary { background: linear-gradient(135deg, #4f8ef7, #7c5bf7); color: #fff; }
+    .btn-primary:active { opacity: 0.82; }
+    .btn-secondary {
+      background: #f5f7fa; color: #777; border: 1px solid #e5e7eb;
+      font-size: 14px; padding: 12px;
+    }
+    .btn-secondary:active { background: #eef0f5; }
+
+    .note { font-size: 11px; color: #ccc; text-align: center; margin-top: 18px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>動画圧縮ツール</h1>
+  <p class="subtitle">指定したサイズに動画を圧縮 ／ ブラウザ内で完結・アップロードなし</p>
+
+  <div class="drop-zone" id="dropZone">
+    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none"
+         viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.3">
+      <path stroke-linecap="round" stroke-linejoin="round"
+            d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021
+               18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+    </svg>
+    <p>ここに動画をドロップ、または<br><span class="link">タップしてファイルを選択</span></p>
+    <p class="drop-hint">MP4 / MOV / WebM など</p>
+  </div>
+
+  <input type="file" id="fileInput" accept="video/*">
+
+  <!-- 目標サイズ選択 -->
+  <div class="target-section" id="targetSection">
+    <div class="field-label">目標サイズ</div>
+    <div class="chips" id="chips">
+      <div class="chip" data-mb="8">8 MB<small>Discord 無料</small></div>
+      <div class="chip active" data-mb="10">10 MB<small>LINE/メール</small></div>
+      <div class="chip" data-mb="25">25 MB<small>Gmail 添付</small></div>
+      <div class="chip" data-mb="50">50 MB<small>Discord Nitro</small></div>
+      <div class="chip" data-mb="custom">カスタム</div>
+    </div>
+    <div class="custom-row" id="customRow">
+      <input type="number" id="customMb" min="1" max="2000" step="1" placeholder="例: 15" inputmode="decimal">
+      <span>MB</span>
+    </div>
+
+    <div class="info-grid">
+      <div class="info-box">
+        <div class="info-label">元のサイズ</div>
+        <div class="info-value warn" id="origSize">—</div>
+      </div>
+      <div class="info-box">
+        <div class="info-label">長さ ／ 解像度</div>
+        <div class="info-value" id="origMeta" style="font-size:14px;">—</div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary visible" id="btnCompress">この設定で圧縮する</button>
+  </div>
+
+  <!-- 結果プレビュー -->
+  <div class="preview-section" id="previewSection">
+    <video class="preview-video" id="previewVideo" controls playsinline></video>
+
+    <div class="info-grid">
+      <div class="info-box">
+        <div class="info-label">元のサイズ</div>
+        <div class="info-value warn" id="origSize2">—</div>
+      </div>
+      <div class="info-box">
+        <div class="info-label">圧縮後のサイズ</div>
+        <div class="info-value ok" id="compSize">—</div>
+      </div>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <button class="btn btn-primary" id="btnDownload">圧縮動画をダウンロード</button>
+    <button class="btn btn-secondary" id="btnReset">別の動画を選択</button>
+  </div>
+
+  <p class="note">
+    動画はブラウザ内で処理され、外部サーバーには送信されません。<br>
+    初回は圧縮エンジン（約 30 MB）の読み込みに少し時間がかかります。
+  </p>
+</div>
+
+<!--
+  ffmpeg.wasm（v0.12.10 / util 0.12.1）。
+  worker チャンク（814.ffmpeg.js）はライブラリが Worker として生成するため、
+  クロスオリジンの CDN から直接読むと SecurityError になる。よって ffmpeg.js /
+  814.ffmpeg.js / util.js は vendor/ に自前ホスト（同一オリジン）。
+  コア wasm（約30MB）は CF Pages の 25MB/ファイル制限を超えるため CDN から toBlobURL で取得。
+-->
+<script src="vendor/ffmpeg.js"></script>
+<script src="vendor/util.js"></script>
+<script>
+const CORE_VER = '0.12.6';
+const CORE_BASE = `https://unpkg.com/@ffmpeg/core@${CORE_VER}/dist/umd`;
+const AUDIO_KBPS = 128;          // 音声ビットレート
+const SAFETY = 0.92;             // 目標サイズに対する安全マージン（muxing オーバーヘッド吸収）
+
+const $ = id => document.getElementById(id);
+const dropZone   = $('dropZone');
+const fileInput  = $('fileInput');
+const targetSec  = $('targetSection');
+const chipsEl    = $('chips');
+const customRow  = $('customRow');
+const customMb   = $('customMb');
+const origSizeEl = $('origSize');
+const origSize2El= $('origSize2');
+const origMetaEl = $('origMeta');
+const previewSec = $('previewSection');
+const previewVid = $('previewVideo');
+const compSizeEl = $('compSize');
+const statusEl   = $('status');
+const progressWrap = $('progressWrap');
+const progressFill = $('progressFill');
+const btnCompress= $('btnCompress');
+const btnDownload= $('btnDownload');
+const btnReset   = $('btnReset');
+
+let ffmpeg = null;
+let ffmpegLoaded = false;
+let currentFile = null;
+let durationSec = 0;
+let vidW = 0, vidH = 0;
+let resultBlob = null;
+let resultName = 'compressed.mp4';
+let targetMB = 10;
+
+// ── ユーティリティ ─────────────────────────────────────────
+function fmt(bytes) {
+  return bytes >= 1048576
+    ? (bytes / 1048576).toFixed(2) + ' MB'
+    : (bytes / 1024).toFixed(1) + ' KB';
+}
+function setProgress(pct) {
+  progressFill.style.width = Math.min(100, Math.max(0, pct)) + '%';
+}
+function setStatus(msg, type = '') {
+  statusEl.textContent = msg;
+  statusEl.className = 'status' + (type ? ' ' + type : '');
+}
+function revokeAfter(url, ms = 60000) { setTimeout(() => URL.revokeObjectURL(url), ms); }
+function fmtDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+// ── ffmpeg ロード（遅延・1回だけ）─────────────────────────
+async function ensureFFmpeg() {
+  if (ffmpegLoaded) return;
+  const { FFmpeg } = FFmpegWASM;
+  const { toBlobURL } = FFmpegUtil;
+  ffmpeg = new FFmpeg();
+  ffmpeg.on('log', ({ message }) => { /* console.log(message); */ });
+  setStatus('圧縮エンジンを読み込み中…（初回のみ）');
+  ffmpeg.on('progress', ({ progress }) => {
+    // progress は 0〜1。エンコード中の進捗に割り当てる（25〜95%）
+    if (encoding) setProgress(25 + Math.min(1, Math.max(0, progress)) * 70);
+  });
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
+  ffmpegLoaded = true;
+}
+let encoding = false;
+
+// ── ファイル選択 ───────────────────────────────────────────
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+// 目標サイズ chip
+chipsEl.addEventListener('click', e => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  [...chipsEl.children].forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  if (chip.dataset.mb === 'custom') {
+    customRow.classList.add('visible');
+    customMb.focus();
+    targetMB = parseFloat(customMb.value) || 0;
+  } else {
+    customRow.classList.remove('visible');
+    targetMB = parseFloat(chip.dataset.mb);
+  }
+});
+customMb.addEventListener('input', () => { targetMB = parseFloat(customMb.value) || 0; });
+
+btnReset.addEventListener('click', reset);
+btnCompress.addEventListener('click', startCompress);
+btnDownload.addEventListener('click', () => {
+  if (!resultBlob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(resultBlob);
+  a.download = resultName;
+  a.click();
+  revokeAfter(a.href, 60000);
+});
+
+function reset() {
+  fileInput.value = '';
+  currentFile = null; resultBlob = null; encoding = false;
+  targetSec.classList.remove('visible');
+  previewSec.classList.remove('visible');
+  ['btnDownload','btnReset'].forEach(id => $(id).classList.remove('visible'));
+  progressWrap.classList.remove('visible');
+  setProgress(0); setStatus('');
+  origSizeEl.textContent = origSize2El.textContent = compSizeEl.textContent = origMetaEl.textContent = '—';
+}
+
+// 動画メタデータ（長さ・解像度）を取得
+function probeMeta(file) {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video');
+    v.preload = 'metadata';
+    const url = URL.createObjectURL(file);
+    v.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve({ duration: v.duration, w: v.videoWidth, h: v.videoHeight });
+    };
+    v.onerror = () => { URL.revokeObjectURL(url); reject(new Error('動画を読み込めませんでした')); };
+    v.src = url;
+  });
+}
+
+async function handleFile(file) {
+  if (!/^video\//i.test(file.type) && !/\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(file.name)) {
+    alert('動画ファイルを選択してください。');
+    return;
+  }
+  reset();
+  currentFile = file;
+  origSizeEl.textContent = fmt(file.size);
+  origMetaEl.textContent = '読み込み中…';
+  targetSec.classList.add('visible');
+
+  try {
+    const meta = await probeMeta(file);
+    durationSec = meta.duration; vidW = meta.w; vidH = meta.h;
+    origMetaEl.textContent = `${fmtDur(durationSec)} ／ ${vidW}×${vidH}`;
+  } catch (e) {
+    origMetaEl.textContent = '—';
+    setStatus(e.message, 'error');
+  }
+}
+
+// ── 圧縮本体 ───────────────────────────────────────────────
+function planResolution(targetBytes) {
+  // 目標ビットレートに対し解像度が高すぎる場合は縮小（bits/pixel/frame でざっくり判定）
+  const totalKbps = (targetBytes * 8 / 1024) / durationSec;
+  const videoKbps = Math.max(80, totalKbps * SAFETY - AUDIO_KBPS);
+  const fps = 30;
+  const longSide = Math.max(vidW, vidH);
+  // 目安: 縦動画 540p で 30fps なら ~800kbps 程度が下限の実用ライン
+  const candidates = [longSide, 1280, 960, 854, 640, 480];
+  for (const target of candidates) {
+    if (target > longSide) continue;
+    const scale = target / longSide;
+    const w = Math.round(vidW * scale), h = Math.round(vidH * scale);
+    const bpp = (videoKbps * 1024) / (w * h * fps); // bits per pixel per frame
+    if (bpp >= 0.04 || target === 480) {
+      return { w: even(w), h: even(h), videoKbps: Math.round(videoKbps), downscaled: target < longSide };
+    }
+  }
+  return { w: even(vidW), h: even(vidH), videoKbps: Math.round(videoKbps), downscaled: false };
+}
+function even(n) { return n % 2 === 0 ? n : n - 1; }
+
+async function encodeOnce(inName, outName, videoKbps, w, h) {
+  const args = [
+    '-i', inName,
+    '-c:v', 'libx264', '-preset', 'veryfast',
+    '-b:v', `${videoKbps}k`,
+    '-maxrate', `${Math.round(videoKbps * 1.45)}k`,
+    '-bufsize', `${Math.round(videoKbps * 2)}k`,
+    '-vf', `scale=${w}:${h}:flags=bicubic`,
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    '-c:a', 'aac', '-b:a', `${AUDIO_KBPS}k`,
+    '-y', outName,
+  ];
+  await ffmpeg.exec(args);
+}
+
+async function startCompress() {
+  if (!currentFile) return;
+  if (!targetMB || targetMB <= 0) { setStatus('目標サイズを入力してください。', 'error'); return; }
+
+  const targetBytes = targetMB * 1024 * 1024;
+  if (currentFile.size <= targetBytes) {
+    if (!confirm(`元のファイル（${fmt(currentFile.size)}）はすでに目標サイズ以下です。それでも圧縮しますか？`)) return;
+  }
+
+  // UI 切替
+  targetSec.classList.remove('visible');
+  previewSec.classList.add('visible');
+  origSize2El.textContent = fmt(currentFile.size);
+  compSizeEl.textContent = '—';
+  btnDownload.classList.remove('visible');
+  btnReset.classList.remove('visible');
+  progressWrap.classList.add('visible');
+  setProgress(4);
+  setStatus('準備中…');
+
+  try {
+    await ensureFFmpeg();
+    setProgress(12);
+
+    const { fetchFile } = FFmpegUtil;
+    const inName = 'input' + (/\.(\w+)$/.exec(currentFile.name)?.[0] || '.mp4');
+    const outName = 'output.mp4';
+    await ffmpeg.writeFile(inName, await fetchFile(currentFile));
+    setProgress(20);
+
+    let plan = planResolution(targetBytes);
+    setStatus(
+      `エンコード中…（${plan.w}×${plan.h} ／ ${plan.videoKbps} kbps）` +
+      (plan.downscaled ? '\n目標が小さいため解像度を下げています' : '')
+    );
+
+    encoding = true;
+    await encodeOnce(inName, outName, plan.videoKbps, plan.w, plan.h);
+    encoding = false;
+
+    let data = await ffmpeg.readFile(outName);
+    let size = data.length ?? data.byteLength;
+
+    // 目標オーバー時は実サイズから補正して1回だけ再エンコード
+    if (size > targetBytes) {
+      const corrected = Math.max(80, Math.round(plan.videoKbps * (targetBytes / size) * 0.95));
+      setStatus(`サイズ微調整中…（${corrected} kbps で再エンコード）`);
+      setProgress(25);
+      encoding = true;
+      await encodeOnce(inName, 'output2.mp4', corrected, plan.w, plan.h);
+      encoding = false;
+      const data2 = await ffmpeg.readFile('output2.mp4');
+      if ((data2.length ?? data2.byteLength) < size) { data = data2; size = data2.length ?? data2.byteLength; }
+    }
+
+    setProgress(100);
+    resultBlob = new Blob([data.buffer], { type: 'video/mp4' });
+    const base = currentFile.name.replace(/\.[^.]+$/, '');
+    resultName = `${base}_${targetMB}MB.mp4`;
+
+    compSizeEl.textContent = fmt(size);
+    const ok = size <= targetBytes;
+    compSizeEl.className = 'info-value ' + (ok ? 'ok' : 'warn');
+    const url = URL.createObjectURL(resultBlob);
+    previewVid.src = url; revokeAfter(url, 180000);
+
+    setStatus(
+      ok ? `✓ 完了！ ${fmt(currentFile.size)} → ${fmt(size)}`
+         : `完了（目標を少し超過: ${fmt(size)}）。さらに小さくするには目標を下げてください。`,
+      ok ? 'success' : ''
+    );
+    btnDownload.classList.add('visible');
+    btnReset.classList.add('visible');
+
+    // 後始末
+    try { await ffmpeg.deleteFile(inName); await ffmpeg.deleteFile(outName); } catch {}
+  } catch (e) {
+    encoding = false;
+    console.log('compress error:', e);
+    setStatus('圧縮に失敗しました。動画が大きすぎるか、形式が未対応の可能性があります。', 'error');
+    btnReset.classList.add('visible');
+  }
+}
+</script>
+</body>
+</html>
