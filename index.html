@@ -124,7 +124,7 @@
     }
     .status {
       font-size: 13px; color: #777; text-align: center; margin-top: 10px;
-      min-height: 18px; line-height: 1.5;
+      min-height: 18px; line-height: 1.5; white-space: pre-line;
     }
     .status.error   { color: #ef4444; }
     .status.success { color: #22c55e; }
@@ -237,9 +237,13 @@
 <script src="vendor/util.js"></script>
 <script>
 const CORE_VER = '0.12.6';
-const CORE_BASE = `https://unpkg.com/@ffmpeg/core@${CORE_VER}/dist/umd`;
+// シングルスレッド版とマルチスレッド版のコア。crossOriginIsolated（COOP/COEP 有効）なら
+// マルチスレッド版を使い CPU 全コアでエンコードする＝大幅に高速。非対応環境は ST にフォールバック。
+const CORE_ST = `https://unpkg.com/@ffmpeg/core@${CORE_VER}/dist/umd`;
+const CORE_MT = `https://unpkg.com/@ffmpeg/core-mt@${CORE_VER}/dist/umd`;
 const AUDIO_KBPS = 128;          // 音声ビットレート
 const SAFETY = 0.92;             // 目標サイズに対する安全マージン（muxing オーバーヘッド吸収）
+let usingMT = false;             // 実際に MT コアで動いているか（UI 表示用）
 
 const $ = id => document.getElementById(id);
 const dropZone   = $('dropZone');
@@ -290,21 +294,45 @@ function fmtDur(s) {
 }
 
 // ── ffmpeg ロード（遅延・1回だけ）─────────────────────────
-async function ensureFFmpeg() {
-  if (ffmpegLoaded) return;
+function newFFmpeg() {
   const { FFmpeg } = FFmpegWASM;
-  const { toBlobURL } = FFmpegUtil;
-  ffmpeg = new FFmpeg();
-  ffmpeg.on('log', ({ message }) => { /* console.log(message); */ });
-  setStatus('圧縮エンジンを読み込み中…（初回のみ）');
-  ffmpeg.on('progress', ({ progress }) => {
+  const f = new FFmpeg();
+  f.on('progress', ({ progress }) => {
     // progress は 0〜1。エンコード中の進捗に割り当てる（25〜95%）
     if (encoding) setProgress(25 + Math.min(1, Math.max(0, progress)) * 70);
   });
+  return f;
+}
+async function ensureFFmpeg() {
+  if (ffmpegLoaded) return;
+  const { toBlobURL } = FFmpegUtil;
+  const canMT = (typeof crossOriginIsolated !== 'undefined') && crossOriginIsolated;
+  setStatus('圧縮エンジンを読み込み中…（初回のみ）');
+
+  if (canMT) {
+    try {
+      ffmpeg = newFFmpeg();
+      await ffmpeg.load({
+        coreURL:   await toBlobURL(`${CORE_MT}/ffmpeg-core.js`,     'text/javascript'),
+        wasmURL:   await toBlobURL(`${CORE_MT}/ffmpeg-core.wasm`,   'application/wasm'),
+        workerURL: await toBlobURL(`${CORE_MT}/ffmpeg-core.worker.js`, 'text/javascript'),
+      });
+      usingMT = true;
+      ffmpegLoaded = true;
+      return;
+    } catch (e) {
+      console.log('MT core load failed, falling back to single-thread:', e);
+      try { ffmpeg.terminate(); } catch {}
+    }
+  }
+
+  // シングルスレッド版（フォールバック）
+  ffmpeg = newFFmpeg();
   await ffmpeg.load({
-    coreURL: await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+    coreURL: await toBlobURL(`${CORE_ST}/ffmpeg-core.js`,   'text/javascript'),
+    wasmURL: await toBlobURL(`${CORE_ST}/ffmpeg-core.wasm`, 'application/wasm'),
   });
+  usingMT = false;
   ffmpegLoaded = true;
 }
 let encoding = false;
@@ -416,19 +444,31 @@ function planResolution(targetBytes) {
 }
 function even(n) { return n % 2 === 0 ? n : n - 1; }
 
-async function encodeOnce(inName, outName, videoKbps, w, h) {
+// 圧縮率に応じてプリセットを選ぶ。軽い圧縮（ビットレートに余裕がある）ほど
+// 速いプリセットでも画質は保てるので、速度を優先する。
+function pickPreset(targetBytes, sourceBytes) {
+  const ratio = targetBytes / sourceBytes;
+  if (ratio >= 0.5)  return 'ultrafast';  // 例: 700MB→500MB。画質劣化はほぼ無く高速
+  if (ratio >= 0.25) return 'superfast';
+  return 'veryfast';                        // 強い圧縮はビットレートが少ないので画質寄りに
+}
+
+async function encodeOnce(inName, outName, videoKbps, w, h, preset) {
   const args = [
     '-i', inName,
-    '-c:v', 'libx264', '-preset', 'veryfast',
+    '-c:v', 'libx264', '-preset', preset,
     '-b:v', `${videoKbps}k`,
     '-maxrate', `${Math.round(videoKbps * 1.45)}k`,
     '-bufsize', `${Math.round(videoKbps * 2)}k`,
-    '-vf', `scale=${w}:${h}:flags=bicubic`,
+  ];
+  // 等倍（ダウンスケールしない & 既に偶数）なら scale フィルタを省いてスケーラの無駄処理を避ける
+  if (!(w === vidW && h === vidH)) args.push('-vf', `scale=${w}:${h}:flags=bicubic`);
+  args.push(
     '-pix_fmt', 'yuv420p',
     '-movflags', '+faststart',
     '-c:a', 'aac', '-b:a', `${AUDIO_KBPS}k`,
     '-y', outName,
-  ];
+  );
   await ffmpeg.exec(args);
 }
 
@@ -452,6 +492,7 @@ async function startCompress() {
   setProgress(4);
   setStatus('準備中…');
 
+  let elapsedTimer = null;
   try {
     await ensureFFmpeg();
     setProgress(12);
@@ -463,30 +504,42 @@ async function startCompress() {
     setProgress(20);
 
     let plan = planResolution(targetBytes);
-    setStatus(
-      `エンコード中…（${plan.w}×${plan.h} ／ ${plan.videoKbps} kbps）` +
-      (plan.downscaled ? '\n目標が小さいため解像度を下げています' : '')
-    );
+    const preset = pickPreset(targetBytes, currentFile.size);
+    const mode = usingMT ? `マルチスレッド` : `シングルスレッド`;
+
+    // 経過時間を表示（長時間でも止まって見えないように）
+    const t0 = performance.now();
+    const baseMsg = () =>
+      `エンコード中…（${plan.w}×${plan.h} ／ ${plan.videoKbps} kbps ／ ${mode}）` +
+      (plan.downscaled ? '\n目標が小さいため解像度を下げています' : '');
+    elapsedTimer = setInterval(() => {
+      if (!encoding) return;
+      const sec = Math.round((performance.now() - t0) / 1000);
+      setStatus(`${baseMsg()}\n経過 ${fmtDur(sec)}`);
+    }, 1000);
+    setStatus(baseMsg());
 
     encoding = true;
-    await encodeOnce(inName, outName, plan.videoKbps, plan.w, plan.h);
+    await encodeOnce(inName, outName, plan.videoKbps, plan.w, plan.h, preset);
     encoding = false;
 
     let data = await ffmpeg.readFile(outName);
     let size = data.length ?? data.byteLength;
 
-    // 目標オーバー時は実サイズから補正して1回だけ再エンコード
+    // 目標オーバー時は実サイズから補正して1回だけ再エンコード（軽圧縮では通常発生しない）
     if (size > targetBytes) {
       const corrected = Math.max(80, Math.round(plan.videoKbps * (targetBytes / size) * 0.95));
       setStatus(`サイズ微調整中…（${corrected} kbps で再エンコード）`);
       setProgress(25);
       encoding = true;
-      await encodeOnce(inName, 'output2.mp4', corrected, plan.w, plan.h);
+      await encodeOnce(inName, 'output2.mp4', corrected, plan.w, plan.h, preset);
       encoding = false;
       const data2 = await ffmpeg.readFile('output2.mp4');
       if ((data2.length ?? data2.byteLength) < size) { data = data2; size = data2.length ?? data2.byteLength; }
     }
 
+    clearInterval(elapsedTimer);
+    const totalSec = Math.round((performance.now() - t0) / 1000);
     setProgress(100);
     resultBlob = new Blob([data.buffer], { type: 'video/mp4' });
     const base = currentFile.name.replace(/\.[^.]+$/, '');
@@ -499,7 +552,7 @@ async function startCompress() {
     previewVid.src = url; revokeAfter(url, 180000);
 
     setStatus(
-      ok ? `✓ 完了！ ${fmt(currentFile.size)} → ${fmt(size)}`
+      ok ? `✓ 完了！ ${fmt(currentFile.size)} → ${fmt(size)}（${fmtDur(totalSec)}）`
          : `完了（目標を少し超過: ${fmt(size)}）。さらに小さくするには目標を下げてください。`,
       ok ? 'success' : ''
     );
@@ -510,6 +563,7 @@ async function startCompress() {
     try { await ffmpeg.deleteFile(inName); await ffmpeg.deleteFile(outName); } catch {}
   } catch (e) {
     encoding = false;
+    if (elapsedTimer) clearInterval(elapsedTimer);
     console.log('compress error:', e);
     setStatus('圧縮に失敗しました。動画が大きすぎるか、形式が未対応の可能性があります。', 'error');
     btnReset.classList.add('visible');

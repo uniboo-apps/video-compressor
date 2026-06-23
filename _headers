@@ -1,0 +1,6 @@
+# Cross-origin isolation を有効化し、マルチスレッド版 ffmpeg.wasm
+# （SharedArrayBuffer 利用）を動かすために必要。
+# これが効くと window.crossOriginIsolated === true になり MT コアが選択される。
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
